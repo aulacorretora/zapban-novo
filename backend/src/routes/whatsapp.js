@@ -18,4 +18,6 @@ router.get('/instances/:instanceId/chats', whatsappController.getChats);
 
 router.get('/instances/:instanceId/contacts', whatsappController.getContacts);
 
+router.post('/instances/:instanceId/disconnect', whatsappController.disconnectInstance);
+
 module.exports = router;

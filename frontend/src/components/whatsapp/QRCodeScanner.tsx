@@ -24,6 +24,7 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
   const MIN_RETRY_INTERVAL = 8000; // 8 seconds
   const MAX_RETRY_INTERVAL = 15000; // 15 seconds
   const QR_EXPIRATION_TIME = 60000; // 60 seconds
+  const MAX_RECONNECT_ATTEMPTS = 5; // Maximum number of reconnection attempts
 
   const getRandomRetryInterval = () => {
     return Math.floor(Math.random() * (MAX_RETRY_INTERVAL - MIN_RETRY_INTERVAL + 1)) + MIN_RETRY_INTERVAL;
@@ -110,12 +111,51 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
     }
   };
 
+  const checkConnectionStatus = async () => {
+    try {
+      const rawUserId = localStorage.getItem('userId') || '';
+      const userId = rawUserId === 'dev-user-id' ? '00000000-0000-0000-0000-000000000000' : rawUserId;
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/status`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'userId': userId,
+        },
+      });
+
+      if (!response.ok) {
+        console.error('Error checking connection status:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      console.log(`Initial connection status for instance ${instanceId}:`, data.status);
+      
+      if (data.status === 'connected') {
+        console.log(`Instance ${instanceId} is already connected`);
+        setStatus('connected');
+        setError(null);
+        onConnected?.();
+      } else if (data.status === 'connecting' || data.status === 'reconnecting') {
+        setStatus('loading');
+      } else {
+        setStatus('idle');
+      }
+    } catch (err) {
+      console.error('Error checking connection status:', err);
+    }
+  };
+
   useEffect(() => {
     if (!instanceId) return;
 
     socket.emit('join_instance', instanceId);
     
-    fetchQRCode();
+    checkConnectionStatus();
+    
+    if (status !== 'connected') {
+      fetchQRCode();
+    }
 
     const handleQRCode = (data: { instanceId: string; qr: string }) => {
       try {
@@ -288,6 +328,22 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
       }
       
       reconnectAttempts.current += 1;
+      
+      if (reconnectAttempts.current > MAX_RECONNECT_ATTEMPTS) {
+        console.log(`Maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
+        setStatus('error');
+        setError(`Número máximo de tentativas (${MAX_RECONNECT_ATTEMPTS}) atingido. Por favor, tente novamente mais tarde.`);
+        setIsGenerating(false);
+        
+        toast({
+          title: "Limite de tentativas atingido",
+          description: `Número máximo de tentativas (${MAX_RECONNECT_ATTEMPTS}) atingido. Por favor, tente novamente mais tarde.`,
+          variant: "destructive",
+        });
+        
+        return;
+      }
+      
       setStatus('idle');
       setError(null);
       setQrCode(null);
@@ -302,7 +358,7 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
         retryTimeoutRef.current = null;
       }
       
-      console.log(`Attempting to reconnect instance ${instanceId}, attempt #${reconnectAttempts.current}`);
+      console.log(`Attempting to reconnect instance ${instanceId}, attempt #${reconnectAttempts.current} of ${MAX_RECONNECT_ATTEMPTS}`);
       socket.emit('join_instance', instanceId);
       
       fetchQRCode();

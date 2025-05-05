@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/button';
 
 export function SidebarNav() {
   const location = useLocation();
-  const { signOut } = useAuth();
+  const { user, signOut } = useAuth();
   const { isMobile } = useBreakpoint();
 
   const isActive = (path: string) => {
@@ -64,7 +64,7 @@ export function SidebarNav() {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton asChild data-active={isActive('/chat')}>
-              <Link to="/instances">
+              <Link to="/chat">
                 <MessageSquare className={isMobile ? "mx-auto" : ""} />
                 <span className={isMobile ? "hidden sm:inline" : ""}>Chats</span>
               </Link>
@@ -87,12 +87,12 @@ export function SidebarNav() {
             </SidebarMenuButton>
           </SidebarMenuItem>
           {/* Admin link - only visible for admin users */}
-          {location.pathname.includes('/admin') && (
+          {(user?.user_metadata?.role === 'admin' || localStorage.getItem('userRole') === 'admin') && (
             <SidebarMenuItem>
               <SidebarMenuButton asChild data-active={isActive('/admin')}>
                 <Link to="/admin">
                   <Users className={isMobile ? "mx-auto" : ""} />
-                  <span className={isMobile ? "hidden sm:inline" : ""}>Admin Panel</span>
+                  <span className={isMobile ? "hidden sm:inline" : ""}>Configurações</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

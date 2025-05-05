@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { QRCodeScanner } from '../components/whatsapp/QRCodeScanner';
-import { Phone, Plus, Trash2, RefreshCw, MessageSquare } from 'lucide-react';
+import { Phone, Plus, Trash2, RefreshCw, MessageSquare, LogOut } from 'lucide-react';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
@@ -30,6 +30,7 @@ export default function Instances() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
 
   const fetchInstances = async () => {
     try {
@@ -74,7 +75,15 @@ export default function Instances() {
 
   useEffect(() => {
     fetchInstances();
-  }, []);
+    
+    const statusInterval = setInterval(() => {
+      if (!showQR) { // Don't poll while showing QR code
+        fetchInstances();
+      }
+    }, 10000);
+    
+    return () => clearInterval(statusInterval);
+  }, [showQR]);
 
   const handleCreateInstance = () => {
     setShowCreateDialog(true);
@@ -169,6 +178,94 @@ export default function Instances() {
       });
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const checkInstanceStatus = async (instanceId: string) => {
+    try {
+      const rawUserId = localStorage.getItem('userId') || '';
+      const userId = rawUserId === 'dev-user-id' ? '00000000-0000-0000-0000-000000000000' : rawUserId;
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/status`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'userId': userId,
+        },
+      });
+
+      if (!response.ok) {
+        console.error(`Error checking status for instance ${instanceId}: ${response.status}`);
+        return;
+      }
+
+      const data = await response.json();
+      
+      setInstances(prevInstances => 
+        prevInstances.map(instance => {
+          if (instance.id === instanceId) {
+            return {
+              ...instance,
+              status: data.status,
+              phone_number: data.phoneNumber
+            };
+          }
+          return instance;
+        })
+      );
+      
+      return data.status;
+    } catch (error: any) {
+      console.error(`Error checking status for instance ${instanceId}:`, error);
+      return null;
+    }
+  };
+  
+  const handleDisconnectInstance = async (instanceId: string) => {
+    try {
+      setDisconnecting(instanceId);
+      
+      const rawUserId = localStorage.getItem('userId') || '';
+      const userId = rawUserId === 'dev-user-id' ? '00000000-0000-0000-0000-000000000000' : rawUserId;
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/disconnect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'userId': userId,
+        },
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to disconnect instance');
+      }
+      
+      toast({
+        title: 'Success',
+        description: 'WhatsApp instance disconnected successfully',
+      });
+      
+      setInstances(prevInstances => 
+        prevInstances.map(instance => {
+          if (instance.id === instanceId) {
+            return {
+              ...instance,
+              status: 'disconnected',
+              phone_number: undefined
+            };
+          }
+          return instance;
+        })
+      );
+    } catch (error: any) {
+      console.error('Error disconnecting instance:', error);
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to disconnect instance',
+        variant: 'destructive',
+      });
+    } finally {
+      setDisconnecting(null);
     }
   };
 
@@ -297,14 +394,29 @@ export default function Instances() {
                     Delete
                   </Button>
                   {instance.status === 'connected' ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => navigate(`/chat/${instance.id}/c0a80121-7ac0-4e1c-9a5b-9c3c7e2e6a7b`)}
-                    >
-                      <MessageSquare className="mr-2 h-4 w-4" />
-                      Chats
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate(`/chat/${instance.id}/c0a80121-7ac0-4e1c-9a5b-9c3c7e2e6a7b`)}
+                      >
+                        <MessageSquare className="mr-2 h-4 w-4" />
+                        Chats
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleDisconnectInstance(instance.id)}
+                        disabled={disconnecting === instance.id}
+                      >
+                        {disconnecting === instance.id ? (
+                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                        ) : (
+                          <LogOut className="mr-2 h-4 w-4" />
+                        )}
+                        Disconnect
+                      </Button>
+                    </div>
                   ) : (
                     <Button
                       size="sm"

@@ -6,6 +6,112 @@ const fs = require('fs');
 const path = require('path');
 
 const connections = new Map();
+let initialized = false;
+
+async function restoreConnections() {
+  if (initialized) return;
+  
+  try {
+    console.log('Attempting to restore WhatsApp connections...');
+    
+    const { data: instances, error } = await supabase
+      .from('whatsapp_instances')
+      .select('*')
+      .eq('status', 'connected');
+      
+    if (error) {
+      console.error('Error fetching connected instances:', error);
+      return;
+    }
+    
+    if (instances && instances.length > 0) {
+      console.log(`Found ${instances.length} previously connected instances to restore`);
+      
+      for (const instance of instances) {
+        const authDir = path.join(__dirname, '..', '..', 'auth', instance.id);
+        
+        if (fs.existsSync(authDir)) {
+          try {
+            const { state, saveCreds } = await useMultiFileAuthState(authDir);
+            
+            const socket = makeWASocket({
+              auth: state,
+              printQRInTerminal: false
+            });
+            
+            connections.set(instance.id, socket);
+            
+            socket.ev.on('connection.update', async (update) => {
+              const { connection, lastDisconnect } = update;
+              
+              if (connection === 'open') {
+                console.log(`Restored connection for instance ${instance.id}!`);
+                
+                await supabase
+                  .from('whatsapp_instances')
+                  .update({
+                    status: 'connected',
+                    last_connected: new Date().toISOString()
+                  })
+                  .eq('id', instance.id);
+              }
+              
+              if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                
+                if (statusCode === DisconnectReason.loggedOut) {
+                  console.log(`WhatsApp instance ${instance.id} logged out during restore`);
+                  
+                  await supabase
+                    .from('whatsapp_instances')
+                    .update({
+                      status: 'disconnected',
+                      last_disconnected: new Date().toISOString()
+                    })
+                    .eq('id', instance.id);
+                    
+                  connections.delete(instance.id);
+                }
+              }
+            });
+            
+            socket.ev.on('creds.update', saveCreds);
+            
+          } catch (err) {
+            console.error(`Failed to restore connection for instance ${instance.id}:`, err);
+            
+            await supabase
+              .from('whatsapp_instances')
+              .update({
+                status: 'disconnected',
+                last_disconnected: new Date().toISOString()
+              })
+              .eq('id', instance.id);
+          }
+        } else {
+          console.log(`Auth directory not found for instance ${instance.id}, marking as disconnected`);
+          
+          await supabase
+            .from('whatsapp_instances')
+            .update({
+              status: 'disconnected',
+              last_disconnected: new Date().toISOString()
+            })
+            .eq('id', instance.id);
+        }
+      }
+    } else {
+      console.log('No previously connected instances found to restore');
+    }
+    
+    initialized = true;
+    console.log('WhatsApp connection restoration process completed');
+    
+  } catch (err) {
+    console.error('Error during connection restoration:', err);
+    initialized = true;
+  }
+}
 
 exports.createInstance = async (req, res) => {
   try {
@@ -278,85 +384,9 @@ exports.generateQR = async (req, res) => {
       }
     });
 
-    socket.ev.on('messages.upsert', async (m) => {
-      if (m.type === 'notify') {
-        for (const msg of m.messages) {
-          if (!msg.key.fromMe) {
-            console.log('Received message:', msg);
-            
-            const { error: msgError } = await supabase
-              .from('messages')
-              .insert([
-                {
-                  instance_id: instanceId,
-                  chat_id: msg.key.remoteJid,
-                  message_id: msg.key.id,
-                  sender: msg.key.participant || msg.key.remoteJid,
-                  content: msg.message?.conversation || 
-                           msg.message?.extendedTextMessage?.text || 
-                           JSON.stringify(msg.message),
-                  timestamp: new Date(msg.messageTimestamp * 1000).toISOString(),
-                  is_from_me: false
-                }
-              ]);
-              
-            if (msgError) {
-              console.error('Error storing message:', msgError);
-            }
-            
-            io.to(`chat:${instanceId}:${msg.key.remoteJid}`).emit('new_message', {
-              instanceId,
-              chatId: msg.key.remoteJid,
-              message: {
-                id: msg.key.id,
-                sender: msg.key.participant || msg.key.remoteJid,
-                content: msg.message?.conversation || 
-                         msg.message?.extendedTextMessage?.text || 
-                         JSON.stringify(msg.message),
-                timestamp: new Date(msg.messageTimestamp * 1000).toISOString(),
-                isFromMe: false
-              }
-            });
-            
-            const { data: templates, error: templatesError } = await supabase
-              .from('message_templates')
-              .select('*')
-              .eq('user_id', userId)
-              .eq('is_active', true);
-              
-            if (!templatesError && templates.length > 0) {
-              const messageContent = msg.message?.conversation || 
-                                    msg.message?.extendedTextMessage?.text || '';
-                                    
-              for (const template of templates) {
-                if (messageContent.toLowerCase().includes(template.trigger.toLowerCase())) {
-                  await socket.sendMessage(msg.key.remoteJid, { text: template.response });
-                  
-                  await supabase
-                    .from('messages')
-                    .insert([
-                      {
-                        instance_id: instanceId,
-                        chat_id: msg.key.remoteJid,
-                        message_id: `auto-${Date.now()}`,
-                        sender: socket.user.id,
-                        content: template.response,
-                        timestamp: new Date().toISOString(),
-                        is_from_me: true,
-                        is_auto_response: true
-                      }
-                    ]);
-                    
-                  break; // Only send the first matching auto-response
-                }
-              }
-            }
-          }
-        }
-      }
-    });
-
     socket.ev.on('creds.update', saveCreds);
+    
+    setupMessageHandler(socket, instanceId);
 
     return res.status(200).json({
       message: 'WhatsApp QR code generation initiated',
@@ -392,7 +422,35 @@ exports.getStatus = async (req, res) => {
     }
 
     const isConnected = connections.has(instanceId);
-    const status = isConnected ? instance.status : 'disconnected';
+    let status = instance.status;
+    
+    if (instance.status === 'connected' && !isConnected) {
+      console.log(`Instance ${instanceId} is marked as connected in DB but not in connections Map. Attempting to restore...`);
+      
+      const authDir = path.join(__dirname, '..', '..', 'auth', instanceId);
+      if (fs.existsSync(authDir)) {
+        try {
+          restoreConnections();
+          status = 'reconnecting';
+        } catch (err) {
+          console.error(`Error restoring connection for ${instanceId}:`, err);
+          status = 'disconnected';
+        }
+      } else {
+        console.log(`Auth directory not found for instance ${instanceId}, marking as disconnected`);
+        status = 'disconnected';
+        
+        await supabase
+          .from('whatsapp_instances')
+          .update({
+            status: 'disconnected',
+            last_disconnected: new Date().toISOString()
+          })
+          .eq('id', instanceId);
+      }
+    } else if (!isConnected) {
+      status = 'disconnected';
+    }
 
     return res.status(200).json({
       instanceId,
@@ -490,3 +548,121 @@ exports.getContacts = async (req, res) => {
     return res.status(500).json({ error: 'Server error' });
   }
 };
+
+function setupMessageHandler(socket, instanceId) {
+  socket.ev.on('messages.upsert', async (m) => {
+    if (m.type === 'notify') {
+      for (const msg of m.messages) {
+        if (!msg.key.fromMe) {
+          console.log('Received message:', msg);
+          
+          const { error: msgError } = await supabase
+            .from('messages')
+            .insert([
+              {
+                instance_id: instanceId,
+                chat_id: msg.key.remoteJid,
+                message_id: msg.key.id,
+                sender: msg.key.participant || msg.key.remoteJid,
+                content: msg.message?.conversation || 
+                         msg.message?.extendedTextMessage?.text || 
+                         JSON.stringify(msg.message),
+                timestamp: new Date(msg.messageTimestamp * 1000).toISOString(),
+                is_from_me: false
+              }
+            ]);
+            
+          if (msgError) {
+            console.error('Error storing message:', msgError);
+          }
+          
+          const io = global.io;
+          if (io) {
+            io.to(`chat:${instanceId}:${msg.key.remoteJid}`).emit('new_message', {
+              instanceId,
+              chatId: msg.key.remoteJid,
+              message: {
+                id: msg.key.id,
+                sender: msg.key.participant || msg.key.remoteJid,
+                content: msg.message?.conversation || 
+                         msg.message?.extendedTextMessage?.text || 
+                         JSON.stringify(msg.message),
+                timestamp: new Date(msg.messageTimestamp * 1000).toISOString(),
+                isFromMe: false
+              }
+            });
+          }
+        }
+      }
+    }
+  });
+}
+
+exports.disconnectInstance = async (req, res) => {
+  try {
+    const { instanceId } = req.params;
+    const userId = req.headers.userId; // Assuming user ID is passed in headers after auth
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'User ID is required' });
+    }
+    
+    const { data: instance, error: fetchError } = await supabase
+      .from('whatsapp_instances')
+      .select('*')
+      .eq('id', instanceId)
+      .eq('user_id', userId)
+      .single();
+      
+    if (fetchError) {
+      console.error('Error fetching instance:', fetchError);
+      return res.status(500).json({ error: 'Failed to fetch instance' });
+    }
+    
+    if (!instance) {
+      return res.status(404).json({ error: 'Instance not found' });
+    }
+    
+    const socket = connections.get(instanceId);
+    
+    if (!socket) {
+      await supabase
+        .from('whatsapp_instances')
+        .update({
+          status: 'disconnected',
+          last_disconnected: new Date().toISOString()
+        })
+        .eq('id', instanceId);
+        
+      return res.status(200).json({ message: 'Instance marked as disconnected' });
+    }
+    
+    socket.logout();
+    socket.end(true);
+    
+    connections.delete(instanceId);
+    
+    await supabase
+      .from('whatsapp_instances')
+      .update({
+        status: 'disconnected',
+        last_disconnected: new Date().toISOString()
+      })
+      .eq('id', instanceId);
+      
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`instance:${instanceId}`).emit('connection_status', {
+        instanceId,
+        status: 'disconnected'
+      });
+    }
+    
+    return res.status(200).json({ message: 'Instance disconnected successfully' });
+  } catch (err) {
+    console.error('Error disconnecting instance:', err);
+    return res.status(500).json({ error: 'Failed to disconnect instance' });
+  }
+};
+
+exports.restoreConnections = restoreConnections;

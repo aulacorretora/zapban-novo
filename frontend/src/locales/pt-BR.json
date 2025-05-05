@@ -111,7 +111,7 @@
     "custom": "Personalizado"
   },
   "admin": {
-    "title": "Painel Administrativo",
+    "title": "Configurações",
     "description": "Gerencie usuários, instâncias e configurações do sistema",
     "users": "Usuários",
     "instances": "Instâncias",
