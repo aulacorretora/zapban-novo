@@ -74,7 +74,15 @@ export default function Instances() {
 
   useEffect(() => {
     fetchInstances();
-  }, []);
+    
+    const statusInterval = setInterval(() => {
+      if (!showQR) { // Don't poll while showing QR code
+        fetchInstances();
+      }
+    }, 10000);
+    
+    return () => clearInterval(statusInterval);
+  }, [showQR]);
 
   const handleCreateInstance = () => {
     setShowCreateDialog(true);
@@ -169,6 +177,45 @@ export default function Instances() {
       });
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const checkInstanceStatus = async (instanceId: string) => {
+    try {
+      const rawUserId = localStorage.getItem('userId') || '';
+      const userId = rawUserId === 'dev-user-id' ? '00000000-0000-0000-0000-000000000000' : rawUserId;
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/status`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'userId': userId,
+        },
+      });
+
+      if (!response.ok) {
+        console.error(`Error checking status for instance ${instanceId}: ${response.status}`);
+        return;
+      }
+
+      const data = await response.json();
+      
+      setInstances(prevInstances => 
+        prevInstances.map(instance => {
+          if (instance.id === instanceId) {
+            return {
+              ...instance,
+              status: data.status,
+              phone_number: data.phoneNumber
+            };
+          }
+          return instance;
+        })
+      );
+      
+      return data.status;
+    } catch (error: any) {
+      console.error(`Error checking status for instance ${instanceId}:`, error);
+      return null;
     }
   };
 

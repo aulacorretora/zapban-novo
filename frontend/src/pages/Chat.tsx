@@ -5,6 +5,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Search, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
+import { io } from 'socket.io-client';
 // import { toast } from '../components/ui/use-toast';
 // import { fetchWithErrorHandling } from '../lib/api';
 
@@ -38,41 +39,99 @@ export default function Chat() {
     }
   }, [user, authLoading, navigate, location, instanceId]);
 
-  useEffect(() => {
-    const fetchContacts = async () => {
-      if (!instanceId || authLoading) return;
+  const fetchContacts = async () => {
+    if (!instanceId || authLoading) return;
+    
+    try {
+      setLoading(true);
+      // setError(null);
       
-      try {
-        setLoading(true);
-        // setError(null);
-        
-        const response = await fetch(
-          `${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/contacts`,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'userId': localStorage.getItem('userId') || '',
-            },
-          }
-        );
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          console.error('Error response:', response.status, errorData);
-          throw new Error(errorData.error || 'Failed to fetch contacts');
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/contacts`,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'userId': localStorage.getItem('userId') || '',
+          },
         }
+      );
 
-        const data = await response.json();
-        setContacts(data.contacts || []);
-        setLoading(false);
-      } catch (error) {
-        console.error('Error fetching contacts:', error);
-        // setError('Erro ao carregar contatos. Por favor, tente novamente.');
-        setLoading(false);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('Error response:', response.status, errorData);
+        throw new Error(errorData.error || 'Failed to fetch contacts');
       }
-    };
 
-    fetchContacts();
+      const data = await response.json();
+      setContacts(data.contacts || []);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching contacts:', error);
+      // setError('Erro ao carregar contatos. Por favor, tente novamente.');
+      setLoading(false);
+    }
+  };
+
+  const checkInstanceStatus = async () => {
+    if (!instanceId || authLoading) return;
+    
+    try {
+      setLoading(true);
+      
+      const rawUserId = localStorage.getItem('userId') || '';
+      const userId = rawUserId === 'dev-user-id' ? '00000000-0000-0000-0000-000000000000' : rawUserId;
+      
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/status`,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'userId': userId,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        console.error('Error checking instance status:', response.status);
+        setLoading(false);
+        return;
+      }
+
+      const data = await response.json();
+      console.log(`Instance ${instanceId} status:`, data.status);
+      
+      if (data.status === 'connected') {
+        fetchContacts();
+      } else {
+        console.log(`Instance ${instanceId} is not connected, redirecting to instances page`);
+        setLoading(false);
+        navigate('/instances');
+      }
+    } catch (error) {
+      console.error('Error checking instance status:', error);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkInstanceStatus();
+    
+    if (instanceId) {
+      const socket = io(import.meta.env.VITE_API_URL);
+      
+      socket.emit('join_instance', instanceId);
+      
+      socket.on('connection_status', (data: { instanceId: string; status: string }) => {
+        if (data.instanceId === instanceId && data.status === 'connected') {
+          fetchContacts();
+        }
+      });
+      
+      return () => {
+        socket.off('connection_status');
+        socket.disconnect();
+      };
+    }
   }, [instanceId, authLoading]);
 
   const filteredContacts = contacts.filter(

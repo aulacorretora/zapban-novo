@@ -111,12 +111,51 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
     }
   };
 
+  const checkConnectionStatus = async () => {
+    try {
+      const rawUserId = localStorage.getItem('userId') || '';
+      const userId = rawUserId === 'dev-user-id' ? '00000000-0000-0000-0000-000000000000' : rawUserId;
+      
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/whatsapp/instances/${instanceId}/status`, {
+        headers: {
+          'Content-Type': 'application/json',
+          'userId': userId,
+        },
+      });
+
+      if (!response.ok) {
+        console.error('Error checking connection status:', response.status);
+        return;
+      }
+
+      const data = await response.json();
+      console.log(`Initial connection status for instance ${instanceId}:`, data.status);
+      
+      if (data.status === 'connected') {
+        console.log(`Instance ${instanceId} is already connected`);
+        setStatus('connected');
+        setError(null);
+        onConnected?.();
+      } else if (data.status === 'connecting' || data.status === 'reconnecting') {
+        setStatus('loading');
+      } else {
+        setStatus('idle');
+      }
+    } catch (err) {
+      console.error('Error checking connection status:', err);
+    }
+  };
+
   useEffect(() => {
     if (!instanceId) return;
 
     socket.emit('join_instance', instanceId);
     
-    fetchQRCode();
+    checkConnectionStatus();
+    
+    if (status !== 'connected') {
+      fetchQRCode();
+    }
 
     const handleQRCode = (data: { instanceId: string; qr: string }) => {
       try {
