@@ -111,7 +111,7 @@
     "custom": "Custom"
   },
   "admin": {
-    "title": "Admin Panel",
+    "title": "Configurações",
     "description": "Manage users, instances, and system settings",
     "users": "Users",
     "instances": "Instances",

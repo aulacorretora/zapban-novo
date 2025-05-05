@@ -5,8 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
-import { Send, Paperclip, Smile, AlertTriangle, Check } from 'lucide-react';
+import { Send, Paperclip, Smile, AlertTriangle, Check, X } from 'lucide-react';
 import { useBreakpoint } from '../../hooks/use-responsive';
+import { WhatsAppMediaMessage } from './WhatsAppMediaMessage';
+import { EmojiPicker } from './EmojiPicker';
 
 type Message = {
   id: string;
@@ -15,6 +17,11 @@ type Message = {
   timestamp: string;
   isFromMe: boolean;
   isAutoResponse?: boolean;
+  mediaType?: 'image' | 'video' | 'audio' | 'document';
+  mediaUrl?: string;
+  fileName?: string;
+  fileSize?: number;
+  mimeType?: string;
 };
 
 export function ChatInterface() {
@@ -23,6 +30,8 @@ export function ChatInterface() {
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { } = useBreakpoint(); // Removed unused isMobile variable
 
@@ -85,20 +94,29 @@ export function ChatInterface() {
   }, [instanceId, chatId]);
 
   const sendMessage = async () => {
-    if (!inputMessage.trim() || !instanceId || !chatId) return;
+    if (!inputMessage.trim() && !selectedFile && !instanceId || !chatId) return;
 
     try {
+      const formData = new FormData();
+      
+      if (inputMessage.trim()) {
+        formData.append('content', inputMessage.trim());
+      }
+      
+      if (selectedFile) {
+        formData.append('media', selectedFile);
+      }
+
       const response = await fetch(
         `${import.meta.env.VITE_API_URL}/api/messages/instances/${instanceId}/chats/${chatId}`,
         {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
             'userId': localStorage.getItem('userId') === 'dev-user-id' 
               ? '00000000-0000-0000-0000-000000000000' 
               : localStorage.getItem('userId') || '',
           },
-          body: JSON.stringify({ content: inputMessage }),
+          body: formData,
         }
       );
 
@@ -107,6 +125,8 @@ export function ChatInterface() {
       }
 
       setInputMessage('');
+      setSelectedFile(null);
+      setShowEmojiPicker(false);
     } catch (err: any) {
       setError(err.message || 'Failed to send message');
     }
@@ -171,7 +191,17 @@ export function ChatInterface() {
                           : "bg-muted rounded-bl-none"
                       } ${message.isAutoResponse ? "border border-yellow-500" : ""}`}
                     >
-                      <div className="text-sm whitespace-pre-wrap break-words">{message.content}</div>
+                      {message.mediaUrl ? (
+                        <WhatsAppMediaMessage 
+                          type={message.mediaType || 'document'} 
+                          url={message.mediaUrl}
+                          fileName={message.fileName}
+                          fileSize={message.fileSize}
+                          mimeType={message.mimeType}
+                        />
+                      ) : (
+                        <div className="text-sm whitespace-pre-wrap break-words">{message.content}</div>
+                      )}
                       <div className="text-xs mt-1 opacity-70 text-right flex justify-end items-center gap-1">
                         {formatTime(message.timestamp)}
                         {message.isAutoResponse && (
@@ -203,33 +233,76 @@ export function ChatInterface() {
               e.preventDefault();
               sendMessage();
             }}
-            className="flex items-center space-x-2"
+            className="flex flex-col space-y-2"
           >
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="flex-shrink-0 text-muted-foreground"
-            >
-              <Paperclip className="h-5 w-5" />
-            </Button>
-            <Input
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              placeholder="Digite uma mensagem..."
-              className="flex-1 border-muted"
-            />
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="flex-shrink-0 text-muted-foreground"
-            >
-              <Smile className="h-5 w-5" />
-            </Button>
-            <Button type="submit" size="icon" className="flex-shrink-0 bg-primary hover:bg-primary/90">
-              <Send className="h-5 w-5" />
-            </Button>
+            {selectedFile && (
+              <div className="flex items-center space-x-2 bg-muted/50 p-2 rounded">
+                <span className="text-sm truncate flex-1">
+                  {selectedFile.name} ({Math.round(selectedFile.size / 1024)} KB)
+                </span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => setSelectedFile(null)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+            
+            <div className="flex items-center space-x-2">
+              <input
+                type="file"
+                id="file-upload"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    setSelectedFile(e.target.files[0]);
+                  }
+                }}
+              />
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="flex-shrink-0 text-muted-foreground"
+                onClick={() => document.getElementById('file-upload')?.click()}
+              >
+                <Paperclip className="h-5 w-5" />
+              </Button>
+              <Input
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                placeholder="Digite uma mensagem..."
+                className="flex-1 border-muted"
+              />
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="flex-shrink-0 text-muted-foreground"
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              >
+                <Smile className="h-5 w-5" />
+              </Button>
+              <Button type="submit" size="icon" className="flex-shrink-0 bg-primary hover:bg-primary/90">
+                <Send className="h-5 w-5" />
+              </Button>
+            </div>
+            
+            {showEmojiPicker && (
+              <div className="relative">
+                <div className="absolute right-0 bottom-12 z-10">
+                  <EmojiPicker 
+                    onEmojiClick={(emoji) => {
+                      setInputMessage(prev => prev + emoji);
+                      setShowEmojiPicker(false);
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </form>
         </div>
       </CardContent>

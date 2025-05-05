@@ -49,7 +49,12 @@ exports.getMessages = async (req, res) => {
         sender: msg.sender,
         timestamp: msg.timestamp,
         isFromMe: msg.is_from_me,
-        isAutoResponse: msg.is_auto_response || false
+        isAutoResponse: msg.is_auto_response || false,
+        mediaType: msg.media_type,
+        mediaUrl: msg.media_url,
+        fileName: msg.file_name,
+        fileSize: msg.file_size,
+        mimeType: msg.mime_type
       }))
     });
   } catch (err) {
@@ -64,13 +69,14 @@ exports.sendMessage = async (req, res) => {
     const { content } = req.body;
     const userId = req.headers.userId; // Assuming user ID is passed in headers after auth
     const io = req.app.get('io');
+    const media = req.file; // File uploaded through multer middleware
 
     if (!userId) {
       return res.status(401).json({ error: 'User ID is required' });
     }
 
-    if (!content) {
-      return res.status(400).json({ error: 'Message content is required' });
+    if (!content && !media) {
+      return res.status(400).json({ error: 'Message content or media is required' });
     }
 
     const { data: instance, error: fetchError } = await supabase
@@ -91,8 +97,68 @@ exports.sendMessage = async (req, res) => {
     }
 
     const socket = connections.get(instanceId);
+    let sentMessage;
+    let messageContent = content || '';
+    let mediaUrl = null;
+    let mediaType = null;
+    let fileName = null;
+    let fileSize = null;
+    let mimeType = null;
 
-    const sentMessage = await socket.sendMessage(chatId, { text: content });
+    if (media) {
+      fileName = media.originalname;
+      fileSize = media.size;
+      mimeType = media.mimetype;
+      
+      const { data: storageData, error: storageError } = await supabase
+        .storage
+        .from('whatsapp-media')
+        .upload(`${instanceId}/${Date.now()}_${fileName}`, media.buffer, {
+          contentType: mimeType
+        });
+      
+      if (storageError) {
+        console.error('Error uploading media to storage:', storageError);
+        return res.status(500).json({ error: 'Failed to upload media' });
+      }
+      
+      const { data: urlData } = await supabase
+        .storage
+        .from('whatsapp-media')
+        .getPublicUrl(storageData.path);
+      
+      mediaUrl = urlData.publicUrl;
+      
+      if (mimeType.startsWith('image/')) {
+        mediaType = 'image';
+        sentMessage = await socket.sendMessage(chatId, { 
+          image: { url: mediaUrl },
+          caption: messageContent
+        });
+      } else if (mimeType.startsWith('video/')) {
+        mediaType = 'video';
+        sentMessage = await socket.sendMessage(chatId, { 
+          video: { url: mediaUrl },
+          caption: messageContent
+        });
+      } else if (mimeType.startsWith('audio/')) {
+        mediaType = 'audio';
+        sentMessage = await socket.sendMessage(chatId, { 
+          audio: { url: mediaUrl },
+          caption: messageContent
+        });
+      } else {
+        mediaType = 'document';
+        sentMessage = await socket.sendMessage(chatId, { 
+          document: { url: mediaUrl },
+          mimetype: mimeType,
+          fileName: fileName,
+          caption: messageContent
+        });
+      }
+    } else {
+      sentMessage = await socket.sendMessage(chatId, { text: messageContent });
+    }
 
     const messageId = sentMessage.key.id;
     const timestamp = new Date().toISOString();
@@ -105,9 +171,14 @@ exports.sendMessage = async (req, res) => {
           chat_id: chatId,
           message_id: messageId,
           sender: socket.user.id,
-          content,
+          content: messageContent,
           timestamp,
-          is_from_me: true
+          is_from_me: true,
+          media_type: mediaType,
+          media_url: mediaUrl,
+          file_name: fileName,
+          file_size: fileSize,
+          mime_type: mimeType
         }
       ])
       .select();
@@ -123,9 +194,14 @@ exports.sendMessage = async (req, res) => {
       message: {
         id: messageId,
         sender: socket.user.id,
-        content,
+        content: messageContent,
         timestamp,
-        isFromMe: true
+        isFromMe: true,
+        mediaType,
+        mediaUrl,
+        fileName,
+        fileSize,
+        mimeType
       }
     });
 
@@ -133,9 +209,14 @@ exports.sendMessage = async (req, res) => {
       message: 'Message sent successfully',
       messageData: {
         id: messageId,
-        content,
+        content: messageContent,
         timestamp,
-        isFromMe: true
+        isFromMe: true,
+        mediaType,
+        mediaUrl,
+        fileName,
+        fileSize,
+        mimeType
       }
     });
   } catch (err) {

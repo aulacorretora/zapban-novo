@@ -92,7 +92,7 @@ export function SidebarNav() {
               <SidebarMenuButton asChild data-active={isActive('/admin')}>
                 <Link to="/admin">
                   <Users className={isMobile ? "mx-auto" : ""} />
-                  <span className={isMobile ? "hidden sm:inline" : ""}>Admin Panel</span>
+                  <span className={isMobile ? "hidden sm:inline" : ""}>Configurações</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
