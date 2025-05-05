@@ -24,6 +24,7 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
   const MIN_RETRY_INTERVAL = 8000; // 8 seconds
   const MAX_RETRY_INTERVAL = 15000; // 15 seconds
   const QR_EXPIRATION_TIME = 60000; // 60 seconds
+  const MAX_RECONNECT_ATTEMPTS = 5; // Maximum number of reconnection attempts
 
   const getRandomRetryInterval = () => {
     return Math.floor(Math.random() * (MAX_RETRY_INTERVAL - MIN_RETRY_INTERVAL + 1)) + MIN_RETRY_INTERVAL;
@@ -288,6 +289,22 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
       }
       
       reconnectAttempts.current += 1;
+      
+      if (reconnectAttempts.current > MAX_RECONNECT_ATTEMPTS) {
+        console.log(`Maximum reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
+        setStatus('error');
+        setError(`Número máximo de tentativas (${MAX_RECONNECT_ATTEMPTS}) atingido. Por favor, tente novamente mais tarde.`);
+        setIsGenerating(false);
+        
+        toast({
+          title: "Limite de tentativas atingido",
+          description: `Número máximo de tentativas (${MAX_RECONNECT_ATTEMPTS}) atingido. Por favor, tente novamente mais tarde.`,
+          variant: "destructive",
+        });
+        
+        return;
+      }
+      
       setStatus('idle');
       setError(null);
       setQrCode(null);
@@ -302,7 +319,7 @@ export function QRCodeScanner({ instanceId, onConnected }: QRCodeScannerProps) {
         retryTimeoutRef.current = null;
       }
       
-      console.log(`Attempting to reconnect instance ${instanceId}, attempt #${reconnectAttempts.current}`);
+      console.log(`Attempting to reconnect instance ${instanceId}, attempt #${reconnectAttempts.current} of ${MAX_RECONNECT_ATTEMPTS}`);
       socket.emit('join_instance', instanceId);
       
       fetchQRCode();

@@ -6,18 +6,54 @@ import { Input } from '../ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../ui/card';
 import { Label } from '../ui/label';
 import { Alert, AlertDescription } from '../ui/alert';
+import { toast } from '../ui/use-toast';
 
 type AuthFormProps = {
-  type: 'login' | 'register';
+  type: 'login' | 'register' | 'reset-password';
+  onSuccess?: () => void;
 };
 
-export function AuthForm({ type }: AuthFormProps) {
+export function AuthForm({ type, onSuccess }: AuthFormProps) {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!email) {
+      setError('Por favor, insira seu email para redefinir a senha');
+      return;
+    }
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/update-password`,
+      });
+      
+      if (error) throw error;
+      
+      setResetSent(true);
+      toast({
+        title: "Email enviado",
+        description: "Verifique seu email para redefinir sua senha",
+        variant: "default"
+      });
+      
+      if (onSuccess) onSuccess();
+    } catch (err: any) {
+      setError(err.message || 'Falha ao enviar email de redefinição de senha');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -33,7 +69,7 @@ export function AuthForm({ type }: AuthFormProps) {
             data: {
               name,
             },
-            emailRedirectTo: `${window.location.origin}/login`,
+            emailRedirectTo: `${window.location.origin}/auth/login`,
           },
         });
 
@@ -50,32 +86,35 @@ export function AuthForm({ type }: AuthFormProps) {
 
         if (profileError) throw profileError;
         
-        navigate('/login');
+        toast({
+          title: "Conta criada com sucesso",
+          description: "Verifique seu email para confirmar sua conta",
+          variant: "default"
+        });
+        
+        navigate('/auth/login');
       } else {
         const { error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
-        console.log('Login attempt result:', error);
-        
-        if (error && (error.message === 'Email not confirmed' || error.message.includes('not confirmed'))) {
-          console.log('Bypassing email confirmation for development');
-          
-          localStorage.setItem('userEmail', email);
-          localStorage.setItem('userName', 'Development User');
-          localStorage.setItem('userId', 'dev-user-id');
-          
-          navigate('/dashboard');
-          return;
+        if (error) {
+          if (error.message.includes('Invalid login credentials')) {
+            throw new Error('Credenciais inválidas. Verifique seu email e senha.');
+          } else if (error.message.includes('Email not confirmed')) {
+            throw new Error('Email não confirmado. Verifique sua caixa de entrada.');
+          } else if (error.message.includes('User not found')) {
+            throw new Error('Usuário não encontrado.');
+          } else {
+            throw error;
+          }
         }
-
-        if (error) throw error;
         
         navigate('/dashboard');
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred');
+      setError(err.message || 'Ocorreu um erro. Tente novamente.');
     } finally {
       setLoading(false);
     }
@@ -84,97 +123,155 @@ export function AuthForm({ type }: AuthFormProps) {
   return (
     <Card className="w-full max-w-md mx-auto">
       <CardHeader>
-        <CardTitle>{type === 'login' ? 'Login' : 'Register'}</CardTitle>
+        <CardTitle>
+          {type === 'login' ? 'Login' : 
+           type === 'register' ? 'Cadastro' : 
+           'Recuperar Senha'}
+        </CardTitle>
         <CardDescription>
           {type === 'login'
-            ? 'Enter your credentials to access your account'
-            : 'Create a new account to get started'}
+            ? 'Digite suas credenciais para acessar sua conta'
+            : type === 'register'
+            ? 'Crie uma nova conta para começar'
+            : 'Digite seu email para receber instruções de recuperação de senha'}
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {type === 'register' && (
+        {type === 'reset-password' ? (
+          <form onSubmit={handleResetPassword} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
+              <Label htmlFor="email">Email</Label>
               <Input
-                id="name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 required
-                placeholder="Your name"
+                placeholder="seu.email@exemplo.com"
               />
             </div>
-          )}
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              placeholder="your.email@example.com"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="••••••••"
-            />
-          </div>
-          {error && (
-            <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading
-              ? 'Loading...'
-              : type === 'login'
-              ? 'Sign In'
-              : 'Create Account'}
-          </Button>
-          
-          {type === 'login' && import.meta.env.DEV && (
-            <Button 
-              type="button" 
-              variant="outline" 
-              className="w-full mt-2" 
-              onClick={() => {
-                console.log('Using development login bypass');
-                localStorage.setItem('userEmail', 'dev@example.com');
-                localStorage.setItem('userName', 'Development User');
-                localStorage.setItem('userId', 'dev-user-id');
-                navigate('/dashboard');
-              }}
-            >
-              Dev Login (Bypass Auth)
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            {resetSent && (
+              <Alert>
+                <AlertDescription>
+                  Email de recuperação enviado. Verifique sua caixa de entrada.
+                </AlertDescription>
+              </Alert>
+            )}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Enviando...' : 'Enviar Email de Recuperação'}
             </Button>
-          )}
-        </form>
+            <div className="text-center mt-4">
+              <Button 
+                variant="link" 
+                className="p-0" 
+                onClick={() => navigate('/auth/login')}
+              >
+                Voltar para o Login
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {type === 'register' && (
+              <div className="space-y-2">
+                <Label htmlFor="name">Nome</Label>
+                <Input
+                  id="name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  placeholder="Seu nome"
+                />
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                placeholder="seu.email@exemplo.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Senha</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                placeholder="••••••••"
+              />
+              {type === 'login' && (
+                <div className="flex justify-end">
+                  <Button 
+                    type="button" 
+                    variant="link" 
+                    className="px-0 font-normal text-xs" 
+                    onClick={() => navigate('/auth/reset-password')}
+                  >
+                    Esqueci minha senha
+                  </Button>
+                </div>
+              )}
+            </div>
+            {error && (
+              <Alert variant="destructive">
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading
+                ? 'Carregando...'
+                : type === 'login'
+                ? 'Entrar'
+                : 'Criar Conta'}
+            </Button>
+            
+            {type === 'login' && import.meta.env.DEV && (
+              <Button 
+                type="button" 
+                variant="outline" 
+                className="w-full mt-2" 
+                onClick={() => {
+                  console.log('Using development login bypass');
+                  localStorage.setItem('userEmail', 'dev@example.com');
+                  localStorage.setItem('userName', 'Development User');
+                  localStorage.setItem('userId', 'dev-user-id');
+                  navigate('/dashboard');
+                }}
+              >
+                Dev Login (Bypass Auth)
+              </Button>
+            )}
+          </form>
+        )}
       </CardContent>
       <CardFooter className="flex justify-center">
         {type === 'login' ? (
           <p className="text-sm text-muted-foreground">
-            Don't have an account?{' '}
-            <Button variant="link" className="p-0" onClick={() => navigate('/register')}>
-              Register
+            Não tem uma conta?{' '}
+            <Button variant="link" className="p-0" onClick={() => navigate('/auth/register')}>
+              Cadastre-se
             </Button>
           </p>
-        ) : (
+        ) : type === 'register' ? (
           <p className="text-sm text-muted-foreground">
-            Already have an account?{' '}
-            <Button variant="link" className="p-0" onClick={() => navigate('/login')}>
-              Login
+            Já tem uma conta?{' '}
+            <Button variant="link" className="p-0" onClick={() => navigate('/auth/login')}>
+              Entrar
             </Button>
           </p>
-        )}
+        ) : null}
       </CardFooter>
     </Card>
   );

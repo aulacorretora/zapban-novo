@@ -24,8 +24,10 @@ function App() {
         <BrowserRouter>
           <Routes>
             {/* Auth Routes */}
-            <Route path="/login" element={<AuthForm type="login" />} />
-            <Route path="/register" element={<AuthForm type="register" />} />
+            <Route path="/auth/login" element={<AuthForm type="login" />} />
+            <Route path="/auth/register" element={<AuthForm type="register" />} />
+            <Route path="/auth/reset-password" element={<AuthForm type="reset-password" />} />
+            <Route path="/auth/update-password" element={<AuthForm type="login" />} />
             
             {/* Protected Routes */}
             <Route path="/" element={<AppLayout />}>
