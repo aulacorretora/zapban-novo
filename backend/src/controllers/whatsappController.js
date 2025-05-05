@@ -598,4 +598,71 @@ function setupMessageHandler(socket, instanceId) {
   });
 }
 
+exports.disconnectInstance = async (req, res) => {
+  try {
+    const { instanceId } = req.params;
+    const userId = req.headers.userId; // Assuming user ID is passed in headers after auth
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'User ID is required' });
+    }
+    
+    const { data: instance, error: fetchError } = await supabase
+      .from('whatsapp_instances')
+      .select('*')
+      .eq('id', instanceId)
+      .eq('user_id', userId)
+      .single();
+      
+    if (fetchError) {
+      console.error('Error fetching instance:', fetchError);
+      return res.status(500).json({ error: 'Failed to fetch instance' });
+    }
+    
+    if (!instance) {
+      return res.status(404).json({ error: 'Instance not found' });
+    }
+    
+    const socket = connections.get(instanceId);
+    
+    if (!socket) {
+      await supabase
+        .from('whatsapp_instances')
+        .update({
+          status: 'disconnected',
+          last_disconnected: new Date().toISOString()
+        })
+        .eq('id', instanceId);
+        
+      return res.status(200).json({ message: 'Instance marked as disconnected' });
+    }
+    
+    socket.logout();
+    socket.end(true);
+    
+    connections.delete(instanceId);
+    
+    await supabase
+      .from('whatsapp_instances')
+      .update({
+        status: 'disconnected',
+        last_disconnected: new Date().toISOString()
+      })
+      .eq('id', instanceId);
+      
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`instance:${instanceId}`).emit('connection_status', {
+        instanceId,
+        status: 'disconnected'
+      });
+    }
+    
+    return res.status(200).json({ message: 'Instance disconnected successfully' });
+  } catch (err) {
+    console.error('Error disconnecting instance:', err);
+    return res.status(500).json({ error: 'Failed to disconnect instance' });
+  }
+};
+
 exports.restoreConnections = restoreConnections;
